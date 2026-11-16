@@ -1,41 +1,46 @@
-# Infrastruktura GPU — Qwen-Image-2.1 (ComfyUI)
+# Qwen-Image-2.1 Multi-Cloud GPU Infrastructure (`ComfyUI`)
 
-Jedno wspólne repozytorium definicji modeli, workflowów oraz wdrożeń pod darmowe platformy GPU.
+Reproducible infrastructure, shared model manifest, and cross-platform runners for deploying **ComfyUI** with **`Comfy-Org/Qwen-Image-2.1`** (multimodal image generation and editing with Qwen3-VL 8B and Qwen3.5-9B Prompt Enhancer) across ROCm bare-metal and CUDA cloud runtimes.
 
-## Struktura
+## Repository Architecture
 
-| Katalog | Przeznaczenie | Status / Darmowy limit |
-| :--- | :--- | :--- |
-| [GPU/Wagi/qwen_image_2_1](GPU/Wagi/qwen_image_2_1) | Wspólny manifest modeli (`models.json`), downloader (`common.py`) i szablony `workflows/` | Jedno źródło prawdy dla wszystkich platform |
-| [GPU/Modal](GPU/Modal) | Deployment serwerowy `comfy_qwen21.py` (`L4`/`A10`, `24 GiB RAM`, `180 s` idle) | **Wdrożone** (`30 USD/mies.` Starter + 1 TiB Volume) |
-| [GPU/Beam.cloud](GPU/Beam.cloud) | `comfy_qwen21_beam.py` (`beam.Service` scale-to-zero, `RTX4090`/`L4`/`A10G`, `24Gi`) | **Brak darmowego limitu** (sprawdzone 16.11.2026: saldo `$0.00`, Developer od `20 USD/mies.`) |
-| [GPU/AMD Developer Cloud](GPU/AMD%20Developer%20Cloud) | `setup_amd_bf16.sh` pod MI300X ROCm (`192 GB VRAM`, natywne wagi `full-bf16`) | **Gotowe** (`100 USD` / 30 dni po akceptacji; **zawsze `Delete` zamiast `Stop`**) |
-| [GPU/Kaggle](GPU/Kaggle) | `run_kaggle_comfy.py` pod Notebook `T4 x2` (`lite-int8`, `/tmp/ComfyUI`, `cloudflared`) | **Gotowe** (`~30h/tydzień`) |
-| [GPU/ModelScope](GPU/ModelScope) | `setup_modelscope.sh` pod `modelscope.cn` PAI-DSW (`A10 24 GB`, `HF_ENDPOINT=hf-mirror.com`) | **Gotowe** (`36h` jednorazowo po KYC Aliyun) |
+All environments share a single canonical definition in [`GPU/Wagi/qwen_image_2_1`](GPU/Wagi/qwen_image_2_1) (`models.json`, `common.py`, and `workflows/`) to avoid duplicated weight lists, mismatched loader nodes, or redundant local installations:
 
----
-
-## Szybkie komendy (Windows PowerShell z rootu repozytorium)
-
-* **Modal — wdrożenie zmian:**
-  ```powershell
-  .\.venv\Scripts\modal.exe deploy .\GPU\Modal\comfy_qwen21.py
-  ```
-* **Beam.cloud — logowanie, pobranie wag na CPU i deploy:**
-  ```powershell
-  .\.venv\Scripts\beam.exe login
-  .\.venv\Scripts\python.exe .\GPU\Beam.cloud\comfy_qwen21_beam.py --download-models
-  .\.venv\Scripts\beam.exe deploy .\GPU\Beam.cloud\comfy_qwen21_beam.py:ui_service
-  ```
-* **Lokalne pobranie wag przez wspólne CLI (opcjonalnie):**
-  ```powershell
-  .\.venv\Scripts\python.exe .\GPU\Wagi\qwen_image_2_1\common.py --profile lite-int8
-  ```
+| Directory | Target Environment | Weight Profile | Notes |
+| :--- | :--- | :--- | :--- |
+| [`GPU/Wagi/qwen_image_2_1`](GPU/Wagi/qwen_image_2_1) | Shared Core | `full-int8`, `lite-int8`, `turbo-lite-int8`, `w4a8`, `full-bf16` | Canonical HF manifest, atomic downloader, and live-preview workflow builder + profile adapter |
+| [`GPU/AMD Developer Cloud`](GPU/AMD%20Developer%20Cloud) | **AMD Instinct™ MI300X (ROCm)** | `full-bf16` (`~32.4 GB`) | Native unquantized BF16 setup preserving ROCm PyTorch wheels + [`benchmark_rocm_bf16.py`](GPU/AMD%20Developer%20Cloud/benchmark_rocm_bf16.py) diagnostic/benchmark helper |
+| [`GPU/Modal`](GPU/Modal) | **Modal (`L4` / `A10`, 24 GB)** | `full-int8` (`~34.0 GB`) | Serverless `@modal.web_server`, persistent `1 TiB` Volume, `24 GiB` RAM, `180 s` scaledown, WS + `/userdata` proxy fixes |
+| [`GPU/Kaggle`](GPU/Kaggle) | **Kaggle (`2× Tesla T4`, 16 GB)** | `lite-int8` (`~17.3 GB`) | Installs into `/tmp/ComfyUI` to stay under the `/kaggle/working` 20 GB cap, `--cache-none`, `cloudflared` tunnel |
+| [`GPU/ModelScope`](GPU/ModelScope) | **ModelScope PAI-DSW (`A10`, 24 GB)** | `full-int8` (`~34.0 GB`) | Uses `/mnt/workspace` persistent disk and `HF_ENDPOINT=https://hf-mirror.com` |
+| [`GPU/Beam.cloud`](GPU/Beam.cloud) | **Beam.cloud (`beam.Service`)** | `full-int8` / `lite-int8` | Scale-to-zero `beam.Service` template *(note: Developer plan requires `$20/mo` or prepaid credits as of Nov 2026)* |
 
 ---
 
-## Przypomnienia bezpieczeństwa (zero opłat)
-1. **Modal:** w `Settings → Usage & Billing` ustaw twardy **Spend Limit = 30 USD**.
-2. **Beam.cloud:** sprawdź `Settings → Credits` i wyłącz auto-doładowanie (prepaid zatrzymuje się przy `0 USD`).
-3. **AMD Developer Cloud:** zatrzymana maszyna nadal nalicza opłaty — po zakończeniu sesji zawsze wybierz **Delete / Terminate**.
-4. **ModelScope:** ręcznie klikaj **Stop** po sesji (instrukcje z `hf-mirror.com` w [GPU/ModelScope/README.md](GPU/ModelScope/README.md)).
+## Key Engineering Highlights
+
+* **ROCm BF16 vs. INT8 ConvRot Evaluation (`MI300X`):** Strips `torch*` entries from ComfyUI `requirements.txt` during install so `pip` does not overwrite preinstalled ROCm/HIP PyTorch builds with CUDA wheels, and adapts workflow loader nodes cleanly to `full-bf16` (`qwen_image_2.1_bf16.safetensors` + `qwen3vl_8b_bf16.safetensors`) to benchmark native BF16 inference alongside `comfy-kitchen` / Triton diagnostics.
+* **Shared Workflow Live-Preview Builder:** Automatically splits `KSampler` + `VAEDecode` onto the root ComfyUI canvas (`taeqi2_1_decoder.pth` TAESD live previews) while keeping the image-edit subgraph compact.
+* **Reverse-Proxy & Memory Hardening:** Includes `sitecustomize.py` runtime patches disabling WebSocket `permessage-deflate` mismatches and normalizing URL-encoded `%2F` paths on `/api/userdata/*`.
+
+---
+
+## Quick Usage (Windows PowerShell)
+
+```powershell
+# Modal deployment (L4/A10, 24 GiB RAM, 180s idle timeout)
+.\.venv\Scripts\modal.exe deploy .\GPU\Modal\comfy_qwen21.py
+
+# Shared CLI downloader / workflow profile adapter
+.\.venv\Scripts\python.exe .\GPU\Wagi\qwen_image_2_1\common.py --profile full-bf16 --model-dir .\models --workflow-dir .\workflows
+```
+
+See platform-specific instructions inside:
+* [AMD Developer Cloud (MI300X ROCm)](GPU/AMD%20Developer%20Cloud/README.md)
+* [Kaggle (T4 × 2)](GPU/Kaggle/README.md)
+* [ModelScope PAI-DSW (A10)](GPU/ModelScope/README.md)
+* [Beam.cloud](GPU/Beam.cloud/README.md)
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -1,31 +1,35 @@
-# AMD Developer Cloud (MI300X 192 GB VRAM, ROCm + BF16)
+# AMD Developer Cloud — MI300X ROCm Evaluation (`full-bf16`)
 
-Środowisko pod darmowe **100 USD kredytów (ważne 30 dni)** z programu **AMD AI Developer Program**.
+Reproducible setup and diagnostics for running **ComfyUI + `Comfy-Org/Qwen-Image-2.1`** on **AMD Instinct™ MI300X (192 GB HBM3)** using the **ROCm** PyTorch stack.
 
-## Dlaczego profil `full-bf16`?
-Na MI300X mamy **192 GB VRAM HBM3**, więc zamiast walczyć z kernelami `int8_convrot` (`comfy-kitchen` / Triton pod ROCm), pobieramy z `Comfy-Org/Qwen-Image-2.1` **pełne wagi BF16 (~32,4 GB)** i automatycznie podmieniamy nazwy plików w workflowach przez [common.py](file:///g:/Projekty/Infrastruktura/GPU/Wagi/qwen_image_2_1/common.py).
+## Why MI300X + `full-bf16`
+The full Qwen-Image-2.1 pipeline combines a 7B DiT backbone (`14.2 GB` in BF16), an 8B Qwen3-VL vision-language encoder (`17.53 GB` in BF16), and a BF16 VAE (`0.68 GB`) — **~32.4 GB of raw weights** before 2K activation buffers and prompt-enhancer stages. Consumer 16–24 GB GPUs must quantize (`int8_convrot` / `w4a8`) or offload to system RAM. On MI300X (`192 GB` HBM3), we can evaluate:
+1. **Unquantized `full-bf16`** inference quality and step latency without CPU offloading,
+2. **`comfy-kitchen` / Triton INT8 ConvRot** compatibility and throughput on `gfx942` / ROCm vs native BF16.
 
-> **KRYTYCZNA ZASADA BEZPIECZEŃSTWA (ROZLICZENIA):**
-> Zatrzymanie VM (`Stop / Power Off`) **NIE przerywa naliczania kredytów**. Po każdej sesji musisz całkowicie **usunąć/zniszczyć instancję (`Delete / Terminate`)**.
+> **Billing Safety Reminder:** Stopping/powering off an instance does **not** release provisioned compute resources. Always **Delete / Terminate** the instance after exporting results.
 
 ---
 
-## Kroki uruchomienia (Windows PowerShell)
+## Setup & Launch (from Windows PowerShell)
 
-1. **Złóż wniosek do AMD AI Developer Program** (profil GitHub/LinkedIn + opis projektu Qwen-Image-2.1; weryfikacja trwa 2–3 dni robocze) i utwórz instancję **MI300X** z kluczem SSH.
-2. **Wyślij na VM wspólny katalog wag/workflowów i skrypt instalacyjny:**
+1. Copy the shared manifest/workflow directory and setup/benchmark scripts to the MI300X VM:
    ```powershell
    scp -r ".\GPU\Wagi\qwen_image_2_1" <user>@<VM_IP>:~/qwen21_shared
-   scp ".\GPU\AMD Developer Cloud\setup_amd_bf16.sh" <user>@<VM_IP>:~/setup_amd_bf16.sh
+   scp ".\GPU\AMD Developer Cloud\setup_amd_bf16.sh" ".\GPU\AMD Developer Cloud\benchmark_rocm_bf16.py" <user>@<VM_IP>:~/
    ```
-3. **Zaloguj się przez SSH i uruchom setup + ComfyUI:**
+2. Verify ROCm/Triton environment and launch ComfyUI bound to localhost:
    ```powershell
-   ssh <user>@<VM_IP> "sed -i 's/\r$//' ~/setup_amd_bf16.sh && bash ~/setup_amd_bf16.sh"
+   ssh <user>@<VM_IP> "python3 ~/benchmark_rocm_bf16.py --check-env && sed -i 's/\r$//' ~/setup_amd_bf16.sh && bash ~/setup_amd_bf16.sh"
    ```
-   *(Jeśli na VM jest nowsza wersja ROCm i potrzebujesz innych kół PyTorch, podaj np. `ROCM_INDEX_URL=https://download.pytorch.org/whl/rocm7.0 bash ~/setup_amd_bf16.sh`.)*
-4. **W drugim oknie PowerShell otwórz bezpieczny tunel SSH:**
+   *(Override `ROCM_INDEX_URL=https://download.pytorch.org/whl/rocm7.0` if needed when preinstalled ROCm torch is absent.)*
+3. Forward port `8188` over an SSH tunnel in a second PowerShell window:
    ```powershell
    ssh -N -L 8188:127.0.0.1:8188 <user>@<VM_IP>
    ```
-   Otwórz w przeglądarce **`http://127.0.0.1:8188`**.
-5. **Po zakończeniu pracy:** pobierz wygenerowane obrazy/workflowy i **usuń (`Delete`) instancję** w panelu AMD Developer Cloud.
+   Open **`http://127.0.0.1:8188`** in your browser (or via Bartosz OS `AMD SSH (8188)` preset).
+4. Optional API latency check while ComfyUI is running:
+   ```bash
+   python3 ~/benchmark_rocm_bf16.py --comfy-url http://127.0.0.1:8188 --prompt-json <api_prompt.json>
+   ```
+5. Export results and **Delete / Terminate** the instance in AMD Developer Cloud when done.
