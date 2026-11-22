@@ -6,3 +6,5 @@ GPU/Wagi/**/weights/
 *.safetensors
 *.pth
 *.tmp
+.pytest_cache/
+GPU/Kaggle/Generacje/
