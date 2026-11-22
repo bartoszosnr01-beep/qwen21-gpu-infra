@@ -50,6 +50,7 @@ from minimax_kaggle.constants import (
     DEFAULT_INPUT_DIR,
     DEFAULT_OUTPAINT_FEATHER,
     DEFAULT_VENV_DIR,
+    DEFAULT_WORKING_DIR,
     MINIMAX_DEFAULT_CFG,
     MINIMAX_DEFAULT_SAMPLER,
     MINIMAX_DEFAULT_SCHEDULER,
@@ -2141,6 +2142,7 @@ async def run_gateway_server(
     )
     runner = web.AppRunner(app, access_log=None)
     runner_ready = False
+    ready_file: Path | None = None
     try:
         await runner.setup()
         runner_ready = True
@@ -2187,6 +2189,15 @@ async def run_gateway_server(
             )
             print(f"BARTOSZ_OS_JSON: {pair_payload}", flush=True)
 
+        if DEFAULT_WORKING_DIR.exists():
+            try:
+                ready_file = DEFAULT_WORKING_DIR / "minimax_gateway_ready.json"
+                ready_file.write_text(pair_payload + "\n", encoding="utf-8")
+                if os.name != "nt":
+                    os.chmod(ready_file, 0o600)
+            except OSError:
+                ready_file = None
+
         gateway.touch_activity()
         watchdog = asyncio.create_task(gateway.idle_watchdog())
         if config.idle_timeout_s > 0:
@@ -2202,6 +2213,11 @@ async def run_gateway_server(
         print(f"[GATEWAY] Shutting down ({gateway.shutdown_reason}).", flush=True)
         await asyncio.sleep(1.0)
     finally:
+        if ready_file is not None:
+            try:
+                ready_file.unlink(missing_ok=True)
+            except OSError:
+                pass
         if tunnel_task is not None and not tunnel_task.done():
             tunnel_task.cancel()
             try:
@@ -2296,10 +2312,19 @@ def prepare_and_launch_gateway_subprocess(
         text=True,
         bufsize=1,
     )
+    log_fp = None
+    if DEFAULT_WORKING_DIR.exists():
+        try:
+            log_fp = (DEFAULT_WORKING_DIR / "minimax_gateway.log").open("w", encoding="utf-8")
+        except OSError:
+            log_fp = None
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
             print(line, end="", flush=True)
+            if log_fp is not None:
+                log_fp.write(line)
+                log_fp.flush()
         return proc.wait()
     except KeyboardInterrupt:
         print("\n[GATEWAY] Stopping server...", flush=True)
@@ -2309,6 +2334,9 @@ def prepare_and_launch_gateway_subprocess(
         except subprocess.TimeoutExpired:
             proc.kill()
             return proc.wait()
+    finally:
+        if log_fp is not None:
+            log_fp.close()
 
 
 def main() -> None:

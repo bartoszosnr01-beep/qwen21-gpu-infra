@@ -707,8 +707,11 @@ def run_tpu_smoke_suite(
             print(f"[TPU-SMOKE] Completed {name}: {json.dumps(res)}", flush=True)
             results.append(res)
     except Exception as exc:
-        print(f"[TPU-SMOKE] ERROR: {exc}", flush=True)
-        results.append({"name": "tpu_smoke_error", "status": "FAIL", "error": str(exc)})
+        import traceback
+
+        tb = traceback.format_exc()
+        print(f"[TPU-SMOKE] ERROR: {exc}\n{tb}", flush=True)
+        results.append({"name": "tpu_smoke_error", "status": "FAIL", "error": str(exc), "traceback": tb})
     finally:
         if proc is not None:
             proc.terminate()
